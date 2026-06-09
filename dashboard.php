@@ -1,42 +1,42 @@
 <?php
 require_once __DIR__ . '/../includes/layout.php';
-require_once __DIR__ . '/../includes/results.php';
-require_role(['student']);
+require_role(['teacher']);
 
-$stmt = $pdo->prepare('
-    SELECT s.*, f.name AS form_name, st.name AS stream_name
-    FROM students s
-    JOIN forms f ON f.id = s.form_id
-    JOIN streams st ON st.id = s.stream_id
-    WHERE s.user_id = ?
-    LIMIT 1
-');
+$stmt = $pdo->prepare('SELECT * FROM teachers WHERE user_id = ? LIMIT 1');
 $stmt->execute([current_user()['id']]);
-$student = $stmt->fetch();
+$teacher = $stmt->fetch();
 
-$activeYear = $pdo->query('SELECT * FROM academic_years WHERE is_active = 1 LIMIT 1')->fetch();
-$firstTerm = $pdo->query('SELECT * FROM terms ORDER BY id LIMIT 1')->fetch();
-$average = 0;
-$position = null;
-if ($student && $activeYear && $firstTerm) {
-    $average = student_average($pdo, (int) $student['id'], (int) $firstTerm['id'], (int) $activeYear['id']);
-    $position = student_position($pdo, (int) $student['id'], (int) $firstTerm['id'], (int) $activeYear['id']);
+$teacherId = (int) ($teacher['id'] ?? 0);
+$subjects = 0;
+$classes = 0;
+$submitted = 0;
+
+if ($teacherId) {
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM teacher_subjects WHERE teacher_id = ?');
+    $stmt->execute([$teacherId]);
+    $subjects = (int) $stmt->fetchColumn();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM teacher_classes WHERE teacher_id = ?');
+    $stmt->execute([$teacherId]);
+    $classes = (int) $stmt->fetchColumn();
+    $stmt = $pdo->prepare('SELECT COUNT(*) FROM results WHERE teacher_id = ?');
+    $stmt->execute([$teacherId]);
+    $submitted = (int) $stmt->fetchColumn();
 }
 
-render_header('Student Dashboard');
+render_header('Teacher Dashboard');
 ?>
-<?php if (!$student): ?>
-    <div class="alert">Your student profile has not been linked by the admin.</div>
-<?php else: ?>
-    <div class="grid">
-        <div class="card"><span>Class</span><p class="metric"><?= e($student['form_name'] . ' ' . $student['stream_name']) ?></p></div>
-        <div class="card"><span>Average</span><p class="metric"><?= e((string) $average) ?></p></div>
-        <div class="card"><span>Position</span><p class="metric"><?= $position ? e((string) $position) : '-' ?></p></div>
-    </div>
-    <div class="actions">
-        <a class="button" href="/student/results.php">My Results</a>
-        <a class="button" href="/student/report_card.php">Report Card</a>
-    </div>
+<?php if (!$teacher): ?>
+    <div class="alert">Your teacher profile has not been linked by the admin.</div>
 <?php endif; ?>
+<div class="grid">
+    <div class="card"><span>Assigned Subjects</span><p class="metric"><?= $subjects ?></p></div>
+    <div class="card"><span>Assigned Classes</span><p class="metric"><?= $classes ?></p></div>
+    <div class="card"><span>Results Entered</span><p class="metric"><?= $submitted ?></p></div>
+</div>
+<div class="actions">
+    <a class="button" href="/teacher/results.php">Enter Marks</a>
+    <a class="button" href="/teacher/performance.php">Class Performance</a>
+    <a class="button" href="/teacher/notify.php">Send Notification</a>
+</div>
 <?php render_footer(); ?>
 
