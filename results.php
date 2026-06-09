@@ -1,55 +1,55 @@
 <?php
-require_once __DIR__ . '/../includes/layout.php';
-require_role(['admin']);
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-    $status = $_POST['status'] === 'approved' ? 'approved' : 'rejected';
-    $stmt = $pdo->prepare('UPDATE results SET status = ? WHERE id = ?');
-    $stmt->execute([$status, (int) $_POST['result_id']]);
-    flash('Result status updated.');
-    header('Location: /admin/results.php');
-    exit;
+function grade_for_mark(PDO $pdo, float $mark): array
+{
+    $stmt = $pdo->prepare('SELECT * FROM grades WHERE ? BETWEEN min_mark AND max_mark LIMIT 1');
+    $stmt->execute([$mark]);
+    return $stmt->fetch() ?: ['grade' => '-', 'remark' => 'No grade'];
 }
 
-$results = $pdo->query("
-    SELECT r.*, CONCAT(s.first_name, ' ', s.last_name) AS student_name, sub.name AS subject_name, t.name AS term_name, ay.year_label, f.name AS form_name, st.name AS stream_name
-    FROM results r
-    JOIN students s ON s.id = r.student_id
-    JOIN subjects sub ON sub.id = r.subject_id
-    JOIN terms t ON t.id = r.term_id
-    JOIN academic_years ay ON ay.id = r.academic_year_id
-    JOIN forms f ON f.id = s.form_id
-    JOIN streams st ON st.id = s.stream_id
-    ORDER BY r.status = 'submitted' DESC, r.updated_at DESC
-")->fetchAll();
+function student_average(PDO $pdo, int $studentId, int $termId, int $yearId, bool $approvedOnly = true): float
+{
+    $statusSql = $approvedOnly ? "AND status = 'approved'" : '';
+    $stmt = $pdo->prepare("SELECT AVG(marks) AS avg_marks FROM results WHERE student_id = ? AND term_id = ? AND academic_year_id = ? {$statusSql}");
+    $stmt->execute([$studentId, $termId, $yearId]);
+    return round((float) ($stmt->fetch()['avg_marks'] ?? 0), 2);
+}
 
-render_header('Approve Results');
-?>
-<div class="table-wrap">
-    <table>
-        <thead><tr><th>Student</th><th>Class</th><th>Subject</th><th>Marks</th><th>Term</th><th>Status</th><th>Action</th></tr></thead>
-        <tbody>
-        <?php foreach ($results as $result): ?>
-            <tr>
-                <td><?= e($result['student_name']) ?></td>
-                <td><?= e($result['form_name'] . ' ' . $result['stream_name']) ?></td>
-                <td><?= e($result['subject_name']) ?></td>
-                <td><?= e($result['marks']) ?></td>
-                <td><?= e($result['term_name'] . ' ' . $result['year_label']) ?></td>
-                <td><?= e($result['status']) ?></td>
-                <td>
-                    <?php if ($result['status'] === 'submitted'): ?>
-                        <form method="post">
-                            <input type="hidden" name="result_id" value="<?= $result['id'] ?>">
-                            <button name="status" value="approved">Approve</button>
-                            <button name="status" value="rejected" class="button danger">Reject</button>
-                        </form>
-                    <?php endif; ?>
-                </td>
-            </tr>
-        <?php endforeach; ?>
-        </tbody>
-    </table>
-</div>
-<?php render_footer(); ?>
+function class_rankings(PDO $pdo, int $formId, int $streamId, int $termId, int $yearId, bool $approvedOnly = true): array
+{
+    $statusSql = $approvedOnly ? "AND r.status = 'approved'" : '';
+    $stmt = $pdo->prepare("
+        SELECT s.id, s.admission_no, CONCAT(s.first_name, ' ', s.last_name) AS student_name, AVG(r.marks) AS average_marks
+        FROM students s
+        LEFT JOIN results r ON r.student_id = s.id AND r.term_id = ? AND r.academic_year_id = ? {$statusSql}
+        WHERE s.form_id = ? AND s.stream_id = ? AND s.status = 'active'
+        GROUP BY s.id
+        ORDER BY average_marks DESC, student_name ASC
+    ");
+    $stmt->execute([$termId, $yearId, $formId, $streamId]);
+    $rows = $stmt->fetchAll();
+    $position = 1;
+    foreach ($rows as &$row) {
+        $row['average_marks'] = round((float) $row['average_marks'], 2);
+        $row['position'] = $position++;
+    }
+    return $rows;
+}
 
+function student_position(PDO $pdo, int $studentId, int $termId, int $yearId, bool $approvedOnly = true): ?int
+{
+    $stmt = $pdo->prepare('SELECT form_id, stream_id FROM students WHERE id = ?');
+    $stmt->execute([$studentId]);
+    $student = $stmt->fetch();
+    if (!$student) {
+        return null;
+    }
+
+    foreach (class_rankings($pdo, (int) $student['form_id'], (int) $student['stream_id'], $termId, $yearId, $approvedOnly) as $rank) {
+        if ((int) $rank['id'] === $studentId) {
+            return (int) $rank['position'];
+        }
+    }
+
+    return null;
+}
