@@ -1,55 +1,63 @@
 <?php
+require_once __DIR__ . '/../includes/layout.php';
+require_once __DIR__ . '/../includes/results.php';
+require_role(['student']);
 
-function grade_for_mark(PDO $pdo, float $mark): array
-{
-    $stmt = $pdo->prepare('SELECT * FROM grades WHERE ? BETWEEN min_mark AND max_mark LIMIT 1');
-    $stmt->execute([$mark]);
-    return $stmt->fetch() ?: ['grade' => '-', 'remark' => 'No grade'];
-}
+$stmt = $pdo->prepare('SELECT * FROM students WHERE user_id = ? LIMIT 1');
+$stmt->execute([current_user()['id']]);
+$student = $stmt->fetch();
 
-function student_average(PDO $pdo, int $studentId, int $termId, int $yearId, bool $approvedOnly = true): float
-{
-    $statusSql = $approvedOnly ? "AND status = 'approved'" : '';
-    $stmt = $pdo->prepare("SELECT AVG(marks) AS avg_marks FROM results WHERE student_id = ? AND term_id = ? AND academic_year_id = ? {$statusSql}");
-    $stmt->execute([$studentId, $termId, $yearId]);
-    return round((float) ($stmt->fetch()['avg_marks'] ?? 0), 2);
-}
+$terms = $pdo->query('SELECT * FROM terms ORDER BY id')->fetchAll();
+$years = $pdo->query('SELECT * FROM academic_years ORDER BY year_label DESC')->fetchAll();
 
-function class_rankings(PDO $pdo, int $formId, int $streamId, int $termId, int $yearId, bool $approvedOnly = true): array
-{
-    $statusSql = $approvedOnly ? "AND r.status = 'approved'" : '';
-    $stmt = $pdo->prepare("
-        SELECT s.id, s.admission_no, CONCAT(s.first_name, ' ', s.last_name) AS student_name, AVG(r.marks) AS average_marks
-        FROM students s
-        LEFT JOIN results r ON r.student_id = s.id AND r.term_id = ? AND r.academic_year_id = ? {$statusSql}
-        WHERE s.form_id = ? AND s.stream_id = ? AND s.status = 'active'
-        GROUP BY s.id
-        ORDER BY average_marks DESC, student_name ASC
-    ");
-    $stmt->execute([$termId, $yearId, $formId, $streamId]);
+$rows = [];
+$average = 0;
+$position = null;
+$overallGrade = ['grade' => '-', 'remark' => '-'];
+
+if ($student && isset($_GET['term_id'], $_GET['year_id'])) {
+    $termId = (int) $_GET['term_id'];
+    $yearId = (int) $_GET['year_id'];
+    $stmt = $pdo->prepare('
+        SELECT r.*, sub.name AS subject_name
+        FROM results r
+        JOIN subjects sub ON sub.id = r.subject_id
+        WHERE r.student_id = ? AND r.term_id = ? AND r.academic_year_id = ? AND r.status = "approved"
+        ORDER BY sub.name
+    ');
+    $stmt->execute([(int) $student['id'], $termId, $yearId]);
     $rows = $stmt->fetchAll();
-    $position = 1;
-    foreach ($rows as &$row) {
-        $row['average_marks'] = round((float) $row['average_marks'], 2);
-        $row['position'] = $position++;
-    }
-    return $rows;
+    $average = student_average($pdo, (int) $student['id'], $termId, $yearId);
+    $position = student_position($pdo, (int) $student['id'], $termId, $yearId);
+    $overallGrade = grade_for_mark($pdo, $average);
 }
 
-function student_position(PDO $pdo, int $studentId, int $termId, int $yearId, bool $approvedOnly = true): ?int
-{
-    $stmt = $pdo->prepare('SELECT form_id, stream_id FROM students WHERE id = ?');
-    $stmt->execute([$studentId]);
-    $student = $stmt->fetch();
-    if (!$student) {
-        return null;
-    }
+render_header('My Results');
+?>
+<form method="get">
+    <div class="grid">
+        <div><label>Term</label><select name="term_id"><?php foreach ($terms as $term): ?><option value="<?= $term['id'] ?>"><?= e($term['name']) ?></option><?php endforeach; ?></select></div>
+        <div><label>Year</label><select name="year_id"><?php foreach ($years as $year): ?><option value="<?= $year['id'] ?>"><?= e($year['year_label']) ?></option><?php endforeach; ?></select></div>
+    </div>
+    <button type="submit">View Results</button>
+</form>
+<?php if ($rows): ?>
+<div class="grid">
+    <div class="card"><span>Average</span><p class="metric"><?= e((string) $average) ?></p></div>
+    <div class="card"><span>Grade</span><p class="metric"><?= e($overallGrade['grade']) ?></p></div>
+    <div class="card"><span>Position</span><p class="metric"><?= $position ? e((string) $position) : '-' ?></p></div>
+</div>
+<div class="table-wrap">
+    <table>
+        <thead><tr><th>Subject</th><th>Marks</th><th>Grade</th><th>Remark</th></tr></thead>
+        <tbody>
+        <?php foreach ($rows as $row): ?>
+            <?php $grade = grade_for_mark($pdo, (float) $row['marks']); ?>
+            <tr><td><?= e($row['subject_name']) ?></td><td><?= e($row['marks']) ?></td><td><?= e($grade['grade']) ?></td><td><?= e($grade['remark']) ?></td></tr>
+        <?php endforeach; ?>
+        </tbody>
+    </table>
+</div>
+<?php endif; ?>
+<?php render_footer(); ?>
 
-    foreach (class_rankings($pdo, (int) $student['form_id'], (int) $student['stream_id'], $termId, $yearId, $approvedOnly) as $rank) {
-        if ((int) $rank['id'] === $studentId) {
-            return (int) $rank['position'];
-        }
-    }
-
-    return null;
-}
