@@ -29,8 +29,10 @@ PHP, MySQL, HTML, CSS, and JavaScript system for managing secondary school stude
 
 ## Author
 
-Name THOBIAS SOLOLO
+Name: THOBIAS SOLOLO
+
 Programme: Bsc. EDU(MICT) 2
+
 Registration number: 14325063/T.24
 
 @kadefue
